@@ -105,6 +105,10 @@ def load_bytes_from_path(path):
 def load_bytes_from_url(url, session):
     """Download a KML/KMZ with a requests.Session that is already logged in."""
     r = session.get(url, timeout=300)
+    if r.status_code in (401, 403):
+        raise ValueError(f"{url} refused the login (HTTP {r.status_code}). Check "
+                         "SENAWAVE_PORTAL_USER / SENAWAVE_PORTAL_PASSWORD and the "
+                         "[portal] auth setting in config.ini.")
     r.raise_for_status()
     raw = r.content
     if raw[:2] == b"PK":

@@ -80,34 +80,165 @@ def setup_logging(work_folder):
 # ----------------------------------------------------------------------------
 # Portal login
 # ----------------------------------------------------------------------------
-def portal_session(cfg):
+# ----------------------------------------------------------------------------
+# Credentials
+# ----------------------------------------------------------------------------
+def _from_registry(name):
+    """
+    Read a Windows user/machine environment variable straight from the registry.
+
+    `setx` writes there, but an already-open Command Prompt (or ArcGIS Pro, or
+    Task Scheduler) keeps the environment it started with, so a freshly set
+    variable is invisible until the program is restarted. Reading the registry
+    picks it up without reopening anything.
+    """
+    try:
+        import winreg
+    except ImportError:
+        return None                      # not Windows
+    for root, key in ((winreg.HKEY_CURRENT_USER, r"Environment"),
+                      (winreg.HKEY_LOCAL_MACHINE,
+                       r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment")):
+        try:
+            with winreg.OpenKey(root, key) as k:
+                val, _ = winreg.QueryValueEx(k, name)
+                if val:
+                    return os.path.expandvars(val)
+        except OSError:
+            continue
+    return None
+
+
+def _credentials_file_path(cfg):
+    p = cfg["portal"] if cfg.has_section("portal") else {}
+    custom = p.get("credentials_file") if hasattr(p, "get") else None
+    if custom:
+        return os.path.expandvars(os.path.expanduser(custom))
+    return os.path.join(os.path.expanduser("~"), ".senawave_sync", "credentials.ini")
+
+
+def _from_credentials_file(cfg):
+    fp = _credentials_file_path(cfg)
+    if not os.path.exists(fp):
+        return None, None, fp
+    c = configparser.ConfigParser(interpolation=None)
+    c.read(fp, encoding="utf-8")
+    sec = c["portal"] if c.has_section("portal") else {}
+    return sec.get("username"), sec.get("password"), fp
+
+
+def get_credentials(cfg, allow_prompt=True):
+    """Find the portal username/password. Returns (user, password, where_found)."""
+    p = cfg["portal"] if cfg.has_section("portal") else {}
+    get = p.get if hasattr(p, "get") else (lambda k, d=None: d)
+    u_var = get("username_env", "SENAWAVE_PORTAL_USER") or "SENAWAVE_PORTAL_USER"
+    p_var = get("password_env", "SENAWAVE_PORTAL_PASSWORD") or "SENAWAVE_PORTAL_PASSWORD"
+
+    user, pwd = os.environ.get(u_var), os.environ.get(p_var)
+    if user and pwd:
+        return user, pwd, "environment variables"
+
+    r_user, r_pwd = _from_registry(u_var), _from_registry(p_var)
+    user, pwd = user or r_user, pwd or r_pwd
+    if user and pwd:
+        return user, pwd, ("Windows user environment (registry) - this window started before "
+                           "they were set, so restart it to pick them up normally")
+
+    f_user, f_pwd, fp = _from_credentials_file(cfg)
+    user, pwd = user or f_user, pwd or f_pwd
+    if user and pwd:
+        return user, pwd, fp
+
+    if allow_prompt and sys.stdin is not None and sys.stdin.isatty():
+        import getpass
+        log.warning("No stored portal credentials found - asking now (this cannot work "
+                    "for scheduled runs; see README).")
+        user = user or input(f"{u_var}: ").strip()
+        pwd = pwd or getpass.getpass(f"{p_var}: ")
+        if user and pwd:
+            return user, pwd, "typed at the prompt"
+
+    missing = ", ".join(n for n, v in ((u_var, user), (p_var, pwd)) if not v)
+    raise RuntimeError(
+        f"Portal credentials not found ({missing} missing). Looked in:\n"
+        f"  1. this process's environment variables\n"
+        f"  2. the Windows user/machine environment in the registry (what `setx` writes)\n"
+        f"  3. {fp}\n"
+        f"Run  python senawave_sync.py --check-env  to see what is visible.")
+
+
+def check_env(cfg):
+    """Report where credentials can and cannot be seen. Never prints the password."""
+    p = cfg["portal"] if cfg.has_section("portal") else {}
+    get = p.get if hasattr(p, "get") else (lambda k, d=None: d)
+    u_var = get("username_env", "SENAWAVE_PORTAL_USER") or "SENAWAVE_PORTAL_USER"
+    p_var = get("password_env", "SENAWAVE_PORTAL_PASSWORD") or "SENAWAVE_PORTAL_PASSWORD"
+    mask = lambda v: "(not set)" if not v else (v if len(v) < 4 else v[0] + "*" * (len(v) - 2) + v[-1])
+    log.info("Credential check")
+    log.info("  this process    %s = %s", u_var, os.environ.get(u_var) or "(not set)")
+    log.info("  this process    %s = %s", p_var, mask(os.environ.get(p_var)))
+    log.info("  registry (setx) %s = %s", u_var, _from_registry(u_var) or "(not set)")
+    log.info("  registry (setx) %s = %s", p_var, mask(_from_registry(p_var)))
+    f_user, f_pwd, fp = _from_credentials_file(cfg)
+    log.info("  file %s", fp)
+    log.info("       username = %s, password = %s", f_user or "(not set)", mask(f_pwd))
+    if os.environ.get(u_var) and not _from_registry(u_var):
+        log.info("  NOTE: set only for this window. Use setx so it survives, or Task Scheduler "
+                 "runs will fail.")
+    if _from_registry(u_var) and not os.environ.get(u_var):
+        log.info("  NOTE: setx has stored them, but this window started earlier and can't see "
+                 "them. The sync reads the registry as a fallback, so it will still work; "
+                 "reopen the prompt for a clean environment.")
+
+
+def portal_session(cfg, allow_prompt=True):
+    """
+    Return a requests.Session that can download the portal feeds.
+
+    auth = basic   (default) the browser's own "Sign in" box -> HTTP Basic auth
+    auth = digest  same box, but the server asks for Digest
+    auth = form    an HTML login page with username/password fields
+    """
     import requests
-    p = cfg["portal"]
-    user = os.environ.get(p.get("username_env", "SENAWAVE_PORTAL_USER"))
-    pwd = os.environ.get(p.get("password_env", "SENAWAVE_PORTAL_PASSWORD"))
-    if not user or not pwd:
-        raise RuntimeError("Portal username/password environment variables are not set "
-                           "(see README: SENAWAVE_PORTAL_USER / SENAWAVE_PORTAL_PASSWORD).")
+    from requests.auth import HTTPBasicAuth, HTTPDigestAuth
+
+    p = cfg["portal"] if cfg.has_section("portal") else {}
+    get = p.get if hasattr(p, "get") else (lambda k, d=None: d)
+    user, pwd, where = get_credentials(cfg, allow_prompt=allow_prompt)
+    log.info("Portal credentials from: %s", where)
+
     s = requests.Session()
     s.headers["User-Agent"] = "Senawave-GIS-Sync/1.0"
-    login_url = p["login_url"]
-    # Pick up hidden form fields (CSRF tokens etc.) from the login page
+    mode = (get("auth", "basic") or "basic").strip().lower()
+
+    if mode == "basic":
+        s.auth = HTTPBasicAuth(user, pwd)
+        return s
+    if mode == "digest":
+        s.auth = HTTPDigestAuth(user, pwd)
+        return s
+    if mode != "form":
+        raise RuntimeError(f"Unknown [portal] auth = {mode!r}; use basic, digest or form.")
+
+    # --- HTML login form
+    login_url = get("login_url")
+    if not login_url:
+        raise RuntimeError("[portal] auth = form needs login_url")
     form = {}
     page = s.get(login_url, timeout=60)
-    for m in re.finditer(r"<input[^>]+>", page.text, re.I):
+    for m in re.finditer(r"<input[^>]+>", page.text, re.I):      # hidden/CSRF fields
         tag = m.group(0)
         if re.search(r"type=['\"]?hidden", tag, re.I):
             n = re.search(r"name=['\"]([^'\"]+)", tag)
             v = re.search(r"value=['\"]([^'\"]*)", tag)
             if n:
                 form[n.group(1)] = v.group(1) if v else ""
-    form[p.get("username_field", "username")] = user
-    form[p.get("password_field", "password")] = pwd
+    form[get("username_field", "username")] = user
+    form[get("password_field", "password")] = pwd
     for k, v in p.items():
         if k.startswith("extra_field."):
             form[k.split(".", 1)[1]] = v
-    post_url = p.get("post_url", login_url)
-    r = s.post(post_url, data=form, timeout=60, allow_redirects=True)
+    r = s.post(get("post_url", login_url), data=form, timeout=60, allow_redirects=True)
     r.raise_for_status()
     return s
 
@@ -340,11 +471,19 @@ def run(args):
     session = {}
     def get_session():
         if "s" not in session:
-            session["s"] = portal_session(cfg)
+            session["s"] = portal_session(cfg, allow_prompt=not args.no_prompt)
         return session["s"]
 
+    if args.check_env:
+        check_env(cfg)
+        return 0
+
     if args.test_login:
-        s = get_session()
+        try:
+            s = get_session()
+        except Exception as e:
+            log.error("%s", e)
+            return 1
         for name in [n.split(":", 1)[1] for n in cfg.sections() if n.startswith("source:")]:
             sec = cfg["source:" + name]
             if sec.get("url"):
@@ -425,6 +564,10 @@ def main():
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--test-login", action="store_true")
+    ap.add_argument("--check-env", action="store_true",
+                    help="show where the portal credentials can be seen from (no password printed)")
+    ap.add_argument("--no-prompt", action="store_true",
+                    help="never ask for credentials interactively (use for scheduled runs)")
     sys.exit(run(ap.parse_args()))
 
 

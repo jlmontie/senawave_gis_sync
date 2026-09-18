@@ -54,9 +54,15 @@ copy config.example.ini config.ini
 **2. Edit `config.ini`:**
 
 - `gdb`: where the geodatabase should live.
-- `[source:design] path`: the NAS path to `Q-NETWORK LINK.kmz`, e.g. `\\NAS01\Engineering\Google Earth\Q-NETWORK LINK.kmz`.
+- `[source:design] path`: the NAS path to `Q-NETWORK LINK.kmz`. **Write it without quotes**, even though it contains spaces - an INI file keeps quotes as part of the value. Use the full `\\server\share\...` form rather than a mapped drive letter, because mapped drives don't exist in scheduled runs:
+
+  ```
+  path = \\NAS\Users Shared\Quentin M\Q-NETWORK LINK.kmz
+  ```
+
+  To confirm the server name, open the mapped drive in File Explorer and look at the address bar, or run `net use` in Command Prompt: the Remote column shows the `\\server\share` each letter points to.
 - `[source:address_ids] url` and `[source:autobill] url`: the two portal links.
-- `[portal]`: the login page URL and the form's field names. To find the field names in Chrome, open the login page, right-click the username box, choose **Inspect**, and copy its `name="..."` value. Do the same for the password box.
+- `[portal]`: leave `auth = basic`. The portal uses the browser's own sign-in box, which is HTTP Basic authentication, so there are no form fields to look up. (If it ever changes to a real login web page, switch to `auth = form` and fill in the commented-out settings.)
 
 **3. Store your portal login** as Windows user environment variables. Open **Command Prompt** and run:
 
@@ -65,7 +71,27 @@ setx SENAWAVE_PORTAL_USER "your-username"
 setx SENAWAVE_PORTAL_PASSWORD "your-password"
 ```
 
-Close and reopen the prompt afterwards. The password is never written to a file.
+`setx` writes the values for future programs only. **Any window that was already open, including the ArcGIS Python Command Prompt, keeps its old environment and can't see them** - this is the usual reason for a "credentials not found" error. Close and reopen the prompt after running `setx`.
+
+The script also reads the values straight from the Windows registry, so it usually works even in a window that was open at the time. To see what is visible from where:
+
+```
+python senawave_sync.py --check-env
+```
+
+It prints which of the three places hold a value and masks the password.
+
+If you'd rather not use environment variables, put the credentials in a file outside the repo instead, at `%USERPROFILE%\.senawave_sync\credentials.ini`:
+
+```
+[portal]
+username = your-username
+password = your-password
+```
+
+Restrict it to your account (right-click > Properties > Security) since it holds a plain-text password. You can point somewhere else with `credentials_file` under `[portal]` in `config.ini`.
+
+When nothing is stored and you're running by hand, the script asks for the username and password at the prompt. Scheduled runs can't do that, so use `--no-prompt` there to fail fast instead of hanging.
 
 **4. Test without touching ArcGIS.** Open the **Python Command Prompt** (Start menu > ArcGIS) and run:
 
@@ -77,7 +103,7 @@ python senawave_sync.py --dry-run
 
 Then open `C:\GIS\Senawave\sync_work\review_design.csv` in Excel. Rows marked `NeedsReview = YES` are the ones to check.
 
-If the login fails, use `path =` instead of `url =` with hand-downloaded files for now. Everything else still works.
+`--test-login` prints `LOGIN OK` and the size of each feed it could download. If it reports HTTP 401, the username or password is wrong; HTTP 403 usually means the account can reach the portal but not that feed. You can always fall back to `path =` instead of `url =` with hand-downloaded files; everything else still works.
 
 **5. Run the first real sync with ArcGIS Pro closed**, since it creates the feature classes:
 
@@ -93,7 +119,45 @@ exec(open(r"C:\Users\jessem\Code\senawave_sync\add_layers_to_map.py").read())
 
 It reads the geodatabase path from your `config.ini`, so there is nothing to edit in it.
 
-Then set symbology the way you like it and **save the project**. Later syncs only replace rows, so your symbology, labels and definition queries stay.
+Then run the symbology script in the same window:
+
+```python
+exec(open(r"C:\Users\jessem\Code\senawave_sync\apply_symbology.py").read())
+```
+
+and **save the project**. Symbology is stored in the project, not in the data, so the nightly sync never disturbs it.
+
+## Symbology
+
+Color says what a feature **is**; line pattern says whether it **exists yet**. Hues come from the Okabe-Ito colorblind-safe palette, so layers stay distinguishable for red-green color vision deficiency and in grayscale printing.
+
+| Layer | Color | Notes |
+|---|---|---|
+| Conduit / UG Fiber | vermillion `213,94,0` | 2.0 pt, the main line on the map |
+| Drops | teal `0,158,115` | 1.2 pt, hidden beyond 1:15,000 |
+| Aerial Fiber | ultra blue `0,77,168` | 1.8 pt |
+| Vaults / Handholes | amber squares | size by `Subtype`: small 4 pt, medium 6, large 9; drop vaults are circles; vaults holding a splice case are purple |
+| Splice Cases | purple diamonds `204,121,167` | aerial cases are ultra blue triangles, matching aerial fiber |
+| Poles | gray circles | |
+| Sites / MDUs | white stars, dark outline | reads on both light basemaps and imagery |
+| Drop / Case Coverage | hollow, slate outline | reference only, stays out of the way |
+| Project Areas | hollow, dark slate outline | |
+| Syringa | muted lilac | third-party plant, deliberately recessive |
+| Address IDs | green / gold / light gray | by `FiberStatus` |
+| AutoBill Customers | dark green / sky blue / light gray | active / lead / closed |
+| Anything "(review)" | magenta | deliberately loud, so misfiled features stand out |
+
+Line pattern comes from `StatusHint`:
+
+| Pattern | Meaning |
+|---|---|
+| solid | constructed or existing |
+| dashed | planned, to be built, or in design |
+| fine dots, gray | abandoned |
+
+Point layers are hidden when zoomed far out so the map stays readable: vaults, splice cases and poles past 1:30,000, drops past 1:15,000, customers past 1:50,000.
+
+To change anything, edit the palette and `LAYERS` tables at the top of `apply_symbology.py` and run it again. It also writes `.lyrx` layer files into a `layers\` folder, so the same styling can be reused in another project with **Import Symbology** or by dragging them in.
 
 ## Scheduling (Task Scheduler)
 
@@ -102,6 +166,7 @@ Then set symbology the way you like it and **save the project**. Later syncs onl
 3. **Triggers** tab: Daily at 5:00 AM. Optionally tick **Repeat task every 1 hour** during work hours.
 4. **Actions** tab:
    - Program: `C:\Users\jessem\Code\senawave_sync\run_sync.bat`
+   - Add arguments: `--no-prompt`
    - Start in: `C:\Users\jessem\Code\senawave_sync`
 5. **Conditions** tab: tick **Start only if the following network connection is available**, so the NAS can be reached.
 
@@ -112,7 +177,7 @@ Sources that haven't changed since the last run are skipped automatically, so fr
 - **Pro can stay open** during syncs. Layers pick up changes on the next redraw.
 - **Adding fields or new feature classes** needs Pro closed. If a sync logs "could not add field", run it again with Pro closed.
 - **Safety check:** if a new download has less than half the rows already loaded, for example because the portal returned a login page or the NAS copy was half-saved, the load is **skipped** and existing data kept. Use `--force` to override when the drop is real.
-- Logs are written to `sync_work\sync.log`.
+- Logs are written to `sync_work\sync.log`. Each run records which of the credential sources it used.
 
 ## Working with the repo
 
@@ -174,6 +239,8 @@ python senawave_sync.py --source design      one source
 python senawave_sync.py --force              reload even if unchanged / bypass the row-count check
 python senawave_sync.py --dry-run            CSVs + review report only (no ArcGIS needed)
 python senawave_sync.py --test-login         check portal credentials
+python senawave_sync.py --check-env          show where credentials are visible from
+python senawave_sync.py --no-prompt          never ask interactively (use in scheduled runs)
 ```
 
 ## Longer term

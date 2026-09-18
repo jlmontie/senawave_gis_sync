@@ -1,6 +1,9 @@
 """
 senawave_sync.py - Keep a file geodatabase in sync with Senawave's KML/KMZ data.
 
+  Settings live in config.ini next to this script (copy config.example.ini
+  the first time - config.ini is git-ignored so paths and URLs stay local).
+
   Sources (see config.ini):
     design       Q-NETWORK LINK.kmz on the NAS  -> Design_* feature classes
     address_ids  portal generate_kml.php feed   -> Cust_AddressIDs
@@ -40,10 +43,25 @@ log = logging.getLogger("senawave_sync")
 # ----------------------------------------------------------------------------
 # Config / logging
 # ----------------------------------------------------------------------------
+DEFAULT_CONFIG = os.environ.get("SENAWAVE_SYNC_CONFIG") or os.path.join(HERE, "config.ini")
+
+
 def load_config(path):
     cfg = configparser.ConfigParser(interpolation=None)
     if not cfg.read(path, encoding="utf-8"):
-        sys.exit(f"Config file not found: {path}")
+        example = os.path.join(HERE, "config.example.ini")
+        hint = ""
+        if os.path.abspath(path) == os.path.join(HERE, "config.ini") and os.path.exists(example):
+            hint = ("\n\nThis repo ships config.example.ini instead, so local paths and URLs "
+                    "never get committed. Create your copy with:\n"
+                    f'    copy "{example}" "{path}"\n'
+                    "then edit it.")
+        sys.exit(f"Config file not found: {path}{hint}")
+    # Relative paths in the config are resolved against the script folder
+    g = cfg["general"]
+    for key in ("gdb", "work_folder"):
+        if g.get(key) and not os.path.isabs(g[key]):
+            g[key] = os.path.normpath(os.path.join(HERE, g[key]))
     return cfg
 
 
@@ -401,7 +419,8 @@ def run(args):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--config", default=os.path.join(HERE, "config.ini"))
+    ap.add_argument("--config", default=DEFAULT_CONFIG,
+                    help="path to config.ini (default: next to this script, or $SENAWAVE_SYNC_CONFIG)")
     ap.add_argument("--source", nargs="*", help="only these sources (names from config.ini)")
     ap.add_argument("--force", action="store_true")
     ap.add_argument("--dry-run", action="store_true")

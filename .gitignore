@@ -1,0 +1,18 @@
+# Local settings (copy config.example.ini to config.ini and edit - never commit it)
+config.ini
+
+# Sync working files: logs, review reports, dry-run CSVs, state
+sync_work/
+*.log
+sync_state.json
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# ArcGIS / data
+*.gdb/
+*.lock
+*.kml
+*.kmz

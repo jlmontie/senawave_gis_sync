@@ -42,7 +42,14 @@ On the sample KMZ, 24,588 features were loaded and **489 (2%) are unclassified**
 
 ## Setup (one time)
 
-**1. Copy the folder** to `C:\GIS\Senawave\senawave_sync\`.
+The code lives in `C:\Users\jessem\Code\senawave_sync` and is tracked in git. Data does not: the geodatabase and the working files live under `C:\GIS\Senawave\`, outside the repo.
+
+**1. Create your local settings file.** `config.ini` is git-ignored so paths, URLs and machine-specific settings never get committed. Copy the template once:
+
+```
+cd C:\Users\jessem\Code\senawave_sync
+copy config.example.ini config.ini
+```
 
 **2. Edit `config.ini`:**
 
@@ -63,7 +70,7 @@ Close and reopen the prompt afterwards. The password is never written to a file.
 **4. Test without touching ArcGIS.** Open the **Python Command Prompt** (Start menu > ArcGIS) and run:
 
 ```
-cd C:\GIS\Senawave\senawave_sync
+cd C:\Users\jessem\Code\senawave_sync
 python senawave_sync.py --test-login
 python senawave_sync.py --dry-run
 ```
@@ -81,8 +88,10 @@ python senawave_sync.py
 **6. Build the project.** Open ArcGIS Pro, open a map, and in the **Python** window run:
 
 ```python
-exec(open(r"C:\GIS\Senawave\senawave_sync\add_layers_to_map.py").read())
+exec(open(r"C:\Users\jessem\Code\senawave_sync\add_layers_to_map.py").read())
 ```
+
+It reads the geodatabase path from your `config.ini`, so there is nothing to edit in it.
 
 Then set symbology the way you like it and **save the project**. Later syncs only replace rows, so your symbology, labels and definition queries stay.
 
@@ -92,8 +101,8 @@ Then set symbology the way you like it and **save the project**. Later syncs onl
 2. **General** tab: name it `Senawave GIS Sync`. Select **Run whether user is logged on or not**, using your own Windows account. The environment variables belong to that account.
 3. **Triggers** tab: Daily at 5:00 AM. Optionally tick **Repeat task every 1 hour** during work hours.
 4. **Actions** tab:
-   - Program: `C:\GIS\Senawave\senawave_sync\run_sync.bat`
-   - Start in: `C:\GIS\Senawave\senawave_sync`
+   - Program: `C:\Users\jessem\Code\senawave_sync\run_sync.bat`
+   - Start in: `C:\Users\jessem\Code\senawave_sync`
 5. **Conditions** tab: tick **Start only if the following network connection is available**, so the NAS can be reached.
 
 Sources that haven't changed since the last run are skipped automatically, so frequent runs are cheap. The `SyncLog` table in the geodatabase shows when each layer last loaded.
@@ -104,6 +113,45 @@ Sources that haven't changed since the last run are skipped automatically, so fr
 - **Adding fields or new feature classes** needs Pro closed. If a sync logs "could not add field", run it again with Pro closed.
 - **Safety check:** if a new download has less than half the rows already loaded, for example because the portal returned a login page or the NAS copy was half-saved, the load is **skipped** and existing data kept. Use `--force` to override when the drop is real.
 - Logs are written to `sync_work\sync.log`.
+
+## Working with the repo
+
+| File | Tracked in git? | What it is |
+|---|---|---|
+| `*.py`, `run_sync.bat`, `README.md` | yes | the tool |
+| `config.example.ini` | yes | template with placeholder paths |
+| `config.ini` | **no** | your real paths, URLs and settings |
+| `sync_work\` | **no** | logs, review reports, dry-run CSVs, sync state |
+| geodatabase | **no** | lives in `C:\GIS\Senawave\` |
+
+Credentials are never in the repo. They come from the `SENAWAVE_PORTAL_USER` and `SENAWAVE_PORTAL_PASSWORD` environment variables.
+
+`config.ini` was committed in the first push, before the template existed. Untrack it once, keeping your local copy:
+
+```
+git rm --cached config.ini
+git add .gitignore .gitattributes config.example.ini
+git commit -m "Untrack local config; add template and gitignore"
+git push
+```
+
+**On another machine**, or after a fresh clone:
+
+```
+git clone <your repo url> senawave_sync
+cd senawave_sync
+copy config.example.ini config.ini
+```
+
+then edit `config.ini` and set the two environment variables. The only dependency beyond ArcGIS Pro's Python is `requests`, which Pro already includes.
+
+To run from a different folder, or to keep several configs, point at one explicitly:
+
+```
+python senawave_sync.py --config D:\configs\senawave_prod.ini
+```
+
+or set a `SENAWAVE_SYNC_CONFIG` environment variable. Relative `gdb` and `work_folder` paths in a config are resolved against the repo folder.
 
 ## Fixing classifications
 

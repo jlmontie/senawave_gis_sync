@@ -1,15 +1,30 @@
-"""
+r"""
 add_layers_to_map.py - Run ONCE inside ArcGIS Pro (Python window or a Notebook)
 after the first sync. Adds the synced feature classes to the active map in
 group layers, symbolized by type, then save your project. After that the
 layers stay pointed at the geodatabase and update whenever the sync runs.
 
-    exec(open(r"C:\GIS\Senawave\senawave_sync\add_layers_to_map.py").read())
+    exec(open(r"C:\Users\jessem\Code\senawave_sync\add_layers_to_map.py").read())
 """
+import configparser
 import os
 import arcpy
 
-GDB = r"C:\GIS\Senawave\Senawave_Network.gdb"      # same as config.ini [general] gdb
+# The geodatabase path is read from config.ini next to this script, so there is
+# only one place to change it. Edit the fallback only if you run this file on
+# its own, away from the repo.
+try:                       # normal import / propy run
+    HERE = os.path.dirname(os.path.abspath(__file__))
+except NameError:          # pasted into Pro's Python window with exec()
+    HERE = r"C:\Users\jessem\Code\senawave_sync"
+GDB = r"C:\GIS\Senawave\Senawave_Network.gdb"
+
+_cfg = configparser.ConfigParser(interpolation=None)
+if _cfg.read(os.path.join(HERE, "config.ini"), encoding="utf-8") and _cfg.has_option("general", "gdb"):
+    GDB = _cfg["general"]["gdb"]
+    if not os.path.isabs(GDB):
+        GDB = os.path.normpath(os.path.join(HERE, GDB))
+print("Using geodatabase:", GDB)
 
 GROUPS = [
     # (group name, [(feature class, layer name, symbolize-by field)])   drawn top to bottom

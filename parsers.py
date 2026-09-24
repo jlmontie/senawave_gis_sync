@@ -101,6 +101,9 @@ def parse_design(records, source_name):
 
 def _design_row(rec, path, fc, sub, method, skey, source_name):
     ext = rec["extdata"]
+    desc = html_to_text(rec["description"])
+    if fc == "SpliceCases" and R.is_slack_loop(path, rec["name"], desc, skey):
+        sub = "Slack loop"
     return {
         "FeatureType": fc,
         "Subtype": _clip(sub, 100),
@@ -117,7 +120,7 @@ def _design_row(rec, path, fc, sub, method, skey, source_name):
         "ConduitSize": R.conduit_size(path, rec["name"]) if fc in ("Conduit", "Drops") else "",
         "ClassMethod": _clip(method, 200),
         "StyleKey": _clip(skey, 120),
-        "Description": _clip(html_to_text(rec["description"]), TEXT_LIMIT),
+        "Description": _clip(desc, TEXT_LIMIT),
         "ExtraAttributes": _clip(json.dumps({k: v for k, v in ext.items() if v not in (None, "")}), TEXT_LIMIT) if ext else "",
         "SourceFile": _clip(source_name),
         "SHAPE@WKT": rec["wkt"],

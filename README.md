@@ -17,7 +17,7 @@ The project and phase folders don't disappear. They become **fields** (`Folder1`
 | Feature class | Contents | Useful fields |
 |---|---|---|
 | `Design_Vaults` | small, medium and large vaults, quazites, HDPE, drop vaults, crew "small box"/"big box" | `Subtype` |
-| `Design_SpliceCases` | aerial and underground splice cases, slack loops, cabinets | `Subtype` |
+| `Design_SpliceCases` | aerial and underground splice cases, slack loops, cabinets | `Subtype` (`Slack loop` marks stored cable, so filter it out when counting splice points) |
 | `Design_Poles` | pole surveys, RMP submissions | |
 | `Design_Conduit` | conduit, conduit/fiber, microduct, backbone, crew production | `ConduitSize`, `StatusHint` |
 | `Design_Drops` | drop conduit and fiber, aerial and UG drops | `Placement` |

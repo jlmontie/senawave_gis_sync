@@ -58,7 +58,8 @@ FOLDER_RULES = [
     (r"DROP|U\.G\.? DROPS",                                          "line", "Drops", "", False),
     (r"AERIAL|STRAND|POLE LINES?|SUBMISSION LINES",                  "line", "AerialFiber", "", False),
     (r"RMP PATHS?|POWER TRENCH|IRRIGA|WATER LINE|PRIVATE ROADS?|CROSSINGS?", "line", "OtherLines", "Utility/reference", False),
-    (r"PRODUCTION|UNDERGROUND WORK",                                 "line", "Conduit", "Crew production", False),
+    # Crew production folders don't say what kind of conduit it is; StatusHint records the status
+    (r"PRODUCTION|UNDERGROUND WORK",                                 "line", "Conduit", "", False),
     (r"CO?U?N?DUI?T|MICRODUCT|\d*\.?\d+(/\d+)?\s*\"",                 "line", "Conduit", "", False),
     (r"FIBER|BACKBONE|LONG ?HAUL|ROUTE|PATHS?\b|UNDERGROUND|MAINLINE|FEED|SPUR|EXT\b|EXP|CABLE",
                                                                      "line", "Conduit", "", True),
@@ -70,10 +71,24 @@ NAME_RULES = [
     (r"^\s*(ex\.?\s+)?big box",                                       "point", "Vaults", "Big box"),
     (r"^Access Structure:",                                           "point", "Vaults", ""),
     (r"^Pole\b|^POLE #",                                              "point", "Poles", ""),
+    (r"^\s*(slack loops?|coil slack)\b",                              "point", "SpliceCases", "Slack loop"),
     (r"conduit (start|end)|(start|end) conduit",                      "point", "OtherPoints", "Conduit start/end"),
     (r"^Fiber Cable:",                                                "line",  "Conduit", "Fiber cable"),
     (r"^DROP CONDUIT",                                                "line",  "Drops", ""),
 ]
+
+# Slack loops share folders with splice cases ("CASES/SLACK LOOPS"), so a point
+# already sorted into SpliceCases gets Subtype "Slack loop" when:
+#   - its own folder is only about slack ("Slack loops", "Brighton Slack Loops"), or
+#   - its name or the START of its description says so ("Slack Loop", "Coil Slack",
+#     "FIBER SLACK LOOP (200')"; not "SLACK SPAN", which is an aerial span), or
+#   - it sits in a folder mentioning SLACK and uses SLACK_LOOP_ICON, which drafters
+#     use for loops there (cases use placemark_circle).
+# "60FT SLACK" at the end of a handhole description is slack stored at a splice,
+# which is why descriptions are only checked at the start.
+SLACK_ONLY_FOLDER_RX = re.compile(r"^(?!.*CASE).*SLACK LOOPS?", re.I)
+SLACK_TEXT_RX = re.compile(r"^\s*((FIBER )?SLACK LOOPS?|COIL SLACK)\b", re.I)
+SLACK_LOOP_ICON = "icon=target.png|"
 
 # Style learning thresholds: a style is trusted when at least STYLE_MIN_COUNT
 # folder-classified features use it and STYLE_MIN_SHARE of them agree.
@@ -114,6 +129,13 @@ def match_name(name, kind):
         if g in (kind, "any") and rx.search(name or ""):
             return fc, st
     return None
+
+def is_slack_loop(path, name, description, skey):
+    leaf = path[-1] if path else ""
+    return bool(SLACK_ONLY_FOLDER_RX.search(leaf)
+                or SLACK_TEXT_RX.search(name or "")
+                or SLACK_TEXT_RX.search(description or "")
+                or (re.search(r"SLACK", leaf, re.I) and (skey or "").startswith(SLACK_LOOP_ICON)))
 
 _SIZE_RX = re.compile(r'(\d*\.?\d+(?:/\d+)?)\s*"')
 def conduit_size(path, name=""):
